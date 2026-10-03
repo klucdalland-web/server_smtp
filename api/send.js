@@ -1,14 +1,21 @@
 import nodemailer from 'nodemailer';
 import crypto from 'node:crypto';
 
+const host = process.env.MAIL_HOST || 'smtp.gmail.com';
+const port = Number(process.env.MAIL_PORT || 465);
+const encryption = (process.env.MAIL_ENCRYPTION || '').toLowerCase();
+const secure = port === 465 || encryption === 'ssl';
+const user = process.env.MAIL_USERNAME || process.env.GMAIL_USER;
+const pass = process.env.MAIL_PASSWORD || process.env.GMAIL_APP_PASSWORD;
+const fromAddress = process.env.MAIL_FROM_ADDRESS || user;
+const fromName = process.env.MAIL_FROM_NAME || 'AfriNumber';
+
 const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_APP_PASSWORD,
-  },
+  host,
+  port,
+  secure,
+  auth: { user, pass },
+  ...(encryption === 'tls' && !secure ? { requireTLS: true } : {}),
 });
 
 function secretIsValid(received) {
@@ -35,6 +42,27 @@ function decodeMaybeB64(raw, b64) {
   return typeof raw === 'string' ? raw : undefined;
 }
 
+function htmlToText(html) {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/h[1-6]>/gi, '\n\n')
+    .replace(/<li[^>]*>/gi, '- ')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, '$2 ($1)')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function readFields(req) {
   const body = req.body && typeof req.body === 'object' ? req.body : {};
 
@@ -43,8 +71,9 @@ function readFields(req) {
   const subject = header(req, 'x-subject') ?? body.subject;
   const html = decodeMaybeB64(header(req, 'x-html') ?? body.html, header(req, 'x-html-b64'));
   const text = decodeMaybeB64(header(req, 'x-text') ?? body.text, header(req, 'x-text-b64'));
+  const replyTo = header(req, 'x-reply-to') ?? body.replyTo;
 
-  return { to, subject, html, text };
+  return { to, subject, html, text, replyTo };
 }
 
 export default async function handler(req, res) {
@@ -56,19 +85,30 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'unauthorized' });
   }
 
-  const { to, subject, html, text } = readFields(req);
+  const { to, subject, html, text, replyTo } = readFields(req);
 
   if (!isEmail(to) || typeof subject !== 'string' || !subject || typeof html !== 'string' || !html) {
     return res.status(400).json({ error: 'invalid_payload' });
   }
 
+  if (replyTo !== undefined && !isEmail(replyTo)) {
+    return res.status(400).json({ error: 'invalid_payload' });
+  }
+
+  const plainText = typeof text === 'string' && text.trim() ? text : htmlToText(html);
+
   try {
     const info = await transporter.sendMail({
-      from: `"${process.env.MAIL_FROM_NAME || 'AfriNumber'}" <${process.env.GMAIL_USER}>`,
+      from: `"${fromName}" <${fromAddress}>`,
       to,
+      replyTo: replyTo || fromAddress,
       subject,
+      // multipart/alternative : HTML + texte → moins de spam
+      text: plainText,
       html,
-      text: typeof text === 'string' ? text : undefined,
+      headers: {
+        'X-Entity-Ref-ID': crypto.randomUUID(),
+      },
     });
     return res.status(200).json({ ok: true, messageId: info.messageId });
   } catch (err) {
