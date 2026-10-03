@@ -8,14 +8,43 @@ API serverless Vercel pour envoyer des emails via Gmail SMTP (Nodemailer).
 POST /api/send
 ```
 
-**Headers**
+### Via headers (recommandé)
 
-| Header         | Valeur              |
-|----------------|---------------------|
-| `Content-Type` | `application/json`  |
-| `x-api-secret` | `MAIL_API_SECRET`   |
+| Header | Requis | Description |
+|--------|--------|-------------|
+| `x-api-secret` | oui | `MAIL_API_SECRET` |
+| `x-to` | oui | Destinataire |
+| `x-subject` | oui | Sujet |
+| `x-html` | oui* | Contenu HTML |
+| `x-text` | non | Contenu texte |
+| `x-html-b64` | oui* | HTML encodé en base64 (si HTML long / caractères spéciaux) |
+| `x-text-b64` | non | Texte encodé en base64 |
 
-**Body JSON**
+\* Fournir `x-html` **ou** `x-html-b64`.
+
+```bash
+curl -X POST https://TON-PROJET.vercel.app/api/send \
+  -H "x-api-secret: $MAIL_API_SECRET" \
+  -H "x-to: destinataire@example.com" \
+  -H "x-subject: Hello" \
+  -H "x-html: <p>Hi</p>" \
+  -H "x-text: Hi"
+```
+
+HTML long / caractères spéciaux → base64 :
+
+```bash
+HTML_B64=$(printf '%s' '<p>Contenu</p>' | base64)
+curl -X POST https://TON-PROJET.vercel.app/api/send \
+  -H "x-api-secret: $MAIL_API_SECRET" \
+  -H "x-to: destinataire@example.com" \
+  -H "x-subject: Hello" \
+  -H "x-html-b64: $HTML_B64"
+```
+
+### Via body JSON (fallback)
+
+Si un champ n’est pas dans les headers, il est lu depuis le body :
 
 ```json
 {
@@ -36,6 +65,8 @@ POST /api/send
 | 405 | `{ "error": "method_not_allowed" }` |
 | 500 | `{ "error": "send_failed" }` |
 
+> Les headers HTTP ont une taille limitée (~8–16 Ko). Pour un HTML long, utilise `x-html-b64`.
+
 ## Variables d'environnement
 
 Configurer dans le dashboard Vercel (Settings → Environment Variables) pour Production et Preview :
@@ -54,15 +85,6 @@ En local, copier `.env.example` vers `.env` et renseigner les valeurs. Ne jamais
 ```bash
 npm install
 npm run dev
-```
-
-Puis tester :
-
-```bash
-curl -X POST http://localhost:3000/api/send \
-  -H "Content-Type: application/json" \
-  -H "x-api-secret: $MAIL_API_SECRET" \
-  -d '{"to":"test@example.com","subject":"Hello","html":"<p>Hi</p>"}'
 ```
 
 ## Déploiement Vercel
